@@ -1,25 +1,140 @@
 ---
-title: "Reproducible Research: Peer Assessment 1"
-output: 
-  html_document:
-    keep_md: true
+title: "Exploratory Data Analysis of Activity Monitoring Data"
+author: "Ross Sweet"
+output: html_document
 ---
 
+## Reading and Cleaning
 
-## Loading and preprocessing the data
+The data is read in as a data frame, and we check the structure of the data frame. 
+
+```{r, echo = TRUE}
+data <- read.csv("/Users/ross.sweet/Dropbox (Simpson Dropbox)/Coursera Data Science/Course 5 Reproducible Research/Week 2/activity.csv", header = TRUE)
+str(data)
+```
+
+We see there are 3 variables. Two of these, "steps" and "interval", are integer class variables. However, the second variable, "date", was read in as a factor variable, rather than a Date class. Thus, we use the package lubridate to convert this column to a Date class variable.
+
+```{r, echo = TRUE, message = FALSE}
+library(lubridate)
+data$date <- ymd(data$date)
+```
+
+The data frame is already tidy, as each row corresponds to one observation on a given date and time interval. Therefore, no more preproccessing is needed at this point.
+
+
+## Steps Per Day
+
+We wish to investigate how the number of steps changes by day. As the original data set has one observation for each day and time interval, we first group the data by date, then summarise to compute the total number of steps on each day. This is accomplished using the dplyr package, which is used extensively throughout this exploratory analysis.
+
+```{r, echo = TRUE, message = FALSE, warning = FALSE}
+library(dplyr)
+data_byday <- data %>%
+        group_by(date) %>%
+        summarise(total_steps = sum(steps))
+head(data_byday)
+```
+
+There are `r nrow(data_byday)` rows in this new data frame, so we visualize the overall trends through a histogram of the total number of steps. The standard number of bins, 30, is used for this histogram. As with all plots in this analysis, we stay in the tidyverse by using ggplot2.
+
+```{r, echo = TRUE, message = FALSE, warning = FALSE}
+library(ggplot2)
+ggplot(data_byday, aes(x = total_steps)) + 
+        geom_histogram() + 
+        xlab("Total Steps per Day")
+```
+
+To summarize the total number of steps per day, we look at two summary statistics, the mean and the median. As there are `r sum(is.na(data$steps))` missing (NA) values of "steps" in the original data set, it is unsurprising we have missing values in our data set grouped by day. Indeed, we have `r sum(is.na(data_byday$total_steps))` days missing all step data. Thus, we ensure we remove NA values from the computations of our summary statistics. For the total number of steps per day, we obtain
+
+```{r, echo = TRUE}
+summarise(data_byday, mean = mean(total_steps, na.rm = TRUE), median = median(total_steps, na.rm = TRUE))
+```
+
+
+## Average Daily Activity Pattern
+
+Rather than grouping the original data by day, we can instead group by time interval. In this case, we will be considering the number of steps at a fixed 5-minute time interval (time of the day) across all days in the data set. As above, we use dplyr to group and summarise, this time by the mean number of steps instead of the total.
+
+```{r, echo = TRUE}
+data_byinterval <- data %>%
+        group_by(interval) %>%
+        summarise(avg_steps = mean(steps, na.rm = TRUE))
+```
+
+There are `r nrow(data_byinterval)` rows (unique time intervals) in this new data frame. Since we are computing the average number of steps across consecutive time intervals, we visualize the change in average number of steps through a time series graph.
+
+```{r, echo = TRUE}
+ggplot(data_byinterval, aes(x = interval, y = avg_steps)) +
+        geom_line() +
+        xlab("Time Interval") +
+        ylab("Average Number of Steps")
+```
+
+
+This time series graph shows a clear maximum average number of steps at a single time interval. We find this time interval and its associated average number of steps.
+
+```{r, echo = TRUE}
+data_byinterval[data_byinterval$avg_steps == max(data_byinterval$avg_steps),]
+```
+
+## Imputing Data
+
+With `r sum(is.na(data$steps))` NA "step" values in the original data set, we can attempt to impute data to obtain a "complete" data set. We apply a simple imputation method, choosing to assign a value equal to the mean number of steps in that observation's time interval.  
+
+We accomplish this imputation by creating a new column in the original data set, "avg_steps", by joining the original data set with the data_byinterval data frame by interval. We can then impute missing values in the "steps" column, followed by deleting the "avg_steps" column.  
+
+```{r, echo = TRUE}
+data_imputed <- data %>%
+        left_join(., data_byinterval, by = "interval") %>%
+        mutate(steps = ifelse(is.na(steps), avg_steps, steps)) %>%
+        select(-avg_steps)
+```
+
+As in the second section, we compute the total number of steps by day and visualize using a histogram. 
+
+```{r, echo = TRUE, message = FALSE}
+dataimp_byday <- data_imputed %>%
+        group_by(date) %>%
+        summarise(total_steps = sum(steps))
+
+ggplot(dataimp_byday, aes(x = total_steps)) + 
+        geom_histogram() + 
+        xlab("Total Steps per Day")
+```
+
+This histogram looks fairly similar to the histogram constructed from the original data. As expected, the frequencies are generally larger, as every day has a value for "total_steps" in the imputed data set. This was not the case for the original data set. To check how imputation changed the data set, we can again view the mean and median total steps per day. Note that we no longer need the "na.rm = TRUE" argument, as there are no missing values.
+
+```{r, echo = TRUE}
+summarise(dataimp_byday, mean = mean(total_steps), median = median(total_steps))
+```
+
+We see that the mean is identically equal to the mean from the original data set, while the median differs by one. In retrospect, this is unsurprising. Taking a set of values and appending it with any number of copies of the mean of the original set has no effect on the mean. Since the histogram in the original data was relatively symmetric with the mean approximately equal to the median, we expect that appending the data set with more copies of the mean will have only a small effect on the median. This was indeed the case for our data set.
+
+
+## Day Type
+
+It is reasonable to assume that step patterns will be different during the work week versus the weekend. The lubridate package includes a function, wday, that takes as an inpute a date and outputs a factor corresponding to the day of the week. Note that factor 01 corresponds to Sunday and 07 corresponds to Saturday. We start by adding a column to the data frame classifying the date as a weekday or weekend.
+
+```{r, echo = TRUE}
+data_wk <- data %>%
+        mutate(day_type = ifelse(wday(date) == 01 | wday(date) == 07, "weekend", "weekday"))
+```
+
+We will split the data by weekday and weekend, then run an analysis similar to the analysis is the "Average Daily Activity Pattern" section. 
+
+```{r, echo = TRUE}
+data_wk_byinterval <- data_wk %>%
+        group_by(interval, day_type) %>%
+        summarise(avg_steps = mean(steps, na.rm = TRUE))
+
+ggplot(data_wk_byinterval, aes(x = interval, y = avg_steps)) +
+        geom_line() +
+        facet_wrap(~ day_type) +
+        xlab("Time Interval") +
+        ylab("Average Number of Steps")
+```
+
+The grid plot of time series graphs does indicate a difference in step activity during different parts of the day on weekdays versus weekends.
 
 
 
-## What is mean total number of steps taken per day?
-
-
-
-## What is the average daily activity pattern?
-
-
-
-## Imputing missing values
-
-
-
-## Are there differences in activity patterns between weekdays and weekends?
